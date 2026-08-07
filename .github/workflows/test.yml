@@ -1,0 +1,31 @@
+# CI for this repo itself. The reusable workflows it ships cannot be tested
+# without a cluster; the shell they delegate to can be, and is.
+#
+# Pull requests only. release.yml runs the same suite on main, and gates the
+# tag on it — running both here would duplicate every push.
+name: Tests
+
+on:
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.36.2
+
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml
+
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+
+      - name: Run tests
+        run: bash tests/run-all.sh

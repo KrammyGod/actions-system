@@ -1,0 +1,6 @@
+# These run on Linux runners. core.autocrlf=true would otherwise leave CRLF in
+# the working tree on Windows, which shellcheck rejects outright — `bash
+# tests/run-all.sh` then fails locally while CI, which checks out LF, passes.
+*.sh   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf

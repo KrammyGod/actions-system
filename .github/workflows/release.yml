@@ -1,0 +1,57 @@
+# Tags a semver release on every push to main whose commits warrant one, and
+# moves the major alias (@v1) onto it. See README.md for the bump rules.
+name: Release
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Force a bump instead of reading the commit messages
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+
+permissions:
+  contents: write
+
+# Two releases racing would both compute the same next version and the second
+# push would fail on an existing tag.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+        with:
+          # Tags, and enough history to find commits since the last release.
+          fetch-depth: 0
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.36.2
+
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml
+
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+
+      # Releasing is the only thing that moves @v1, so the gate has to be here.
+      # test.yml covers pull requests; this covers what actually ships.
+      - name: Run tests
+        run: bash tests/run-all.sh
+
+      - name: Tag and release
+        id: release
+        env:
+          BUMP: ${{ inputs.bump || 'auto' }}
+          GH_TOKEN: ${{ github.token }}
+          SCRIPT: .github/release/release.sh
+        run: bash "$SCRIPT"

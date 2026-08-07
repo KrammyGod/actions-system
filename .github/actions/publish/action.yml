@@ -1,0 +1,48 @@
+name: Publish manifests
+description: Pin images into a wrapper overlay, render it, and push it as a Flux OCI artifact.
+
+inputs:
+  pins:
+    description: TSV of <name>\t<newName>\t<newTag>
+    required: true
+  namespace:
+    description: Namespace the manifests are rendered into
+    required: true
+  artifact:
+    description: OCI repository for the manifests, without a tag
+    required: true
+  push:
+    description: Push the artifact. Anything but "true" renders and verifies only.
+    required: false
+    default: 'false'
+  tag:
+    description: Moving tag the cluster's OCIRepository follows
+    required: false
+    default: main
+  kustomize-dir:
+    description: Kustomize root, relative to the repo
+    required: false
+    default: kustomize
+  overlay:
+    description: Overlay path relative to kustomize-dir
+    required: false
+    default: overlays/prod
+
+runs:
+  using: composite
+  steps:
+    - name: Render and publish
+      shell: bash
+      env:
+        PINS: ${{ inputs.pins }}
+        NAMESPACE: ${{ inputs.namespace }}
+        ARTIFACT: ${{ inputs.artifact }}
+        PUSH: ${{ inputs.push }}
+        TAG: ${{ inputs.tag }}
+        KDIR: ${{ inputs.kustomize-dir }}
+        OVERLAY: ${{ inputs.overlay }}
+        SHA: ${{ github.sha }}
+        SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        REVISION: ${{ github.ref_name }}@sha1:${{ github.sha }}
+        SCRIPT: ${{ github.action_path }}/publish.sh
+      run: bash "$SCRIPT"

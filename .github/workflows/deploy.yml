@@ -1,0 +1,154 @@
+# Reusable build-and-publish pipeline. See README.md for the caller contract.
+name: Build and publish
+
+on:
+  workflow_call:
+    inputs:
+      namespace:
+        description: Namespace to deploy into. Also names the manifest artifact.
+        required: true
+        type: string
+      images:
+        description: 'JSON array of {name, context?, dockerfile?}'
+        required: true
+        type: string
+      registry:
+        required: false
+        type: string
+        default: ghcr.io/krammygod
+      kustomize_dir:
+        required: false
+        type: string
+        default: kustomize
+      overlay:
+        description: Overlay path relative to kustomize_dir.
+        required: false
+        type: string
+        default: overlays/prod
+      runner:
+        required: false
+        type: string
+        default: ubuntu-24.04-arm
+    outputs:
+      tags:
+        description: JSON object mapping image name to the tag that was built
+        value: ${{ jobs.checksum.outputs.tags }}
+
+jobs:
+  # Tags are computed ONCE here and consumed by every other job, so build and
+  # publish cannot disagree about what shipped.
+  checksum:
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+    outputs:
+      tags: ${{ steps.sums.outputs.tags }}
+      pins: ${{ steps.sums.outputs.pins }}
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Context checksums
+        id: sums
+        uses: KrammyGod/actions-system/.github/actions/checksum@v1
+        with:
+          images: ${{ inputs.images }}
+          registry: ${{ inputs.registry }}
+          dev-suffix: ${{ github.event_name == 'pull_request' && '-dev' || '' }}
+
+  build:
+    needs: [checksum]
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      # One broken image should not hide the state of the others.
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(inputs.images) }}
+    env:
+      TAG: ${{ fromJSON(needs.checksum.outputs.tags)[matrix.image.name] }}
+      SUFFIX: ${{ github.event_name == 'pull_request' && '-dev' || '' }}
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Content-addressed tags make this sound: an identical context yields an
+      # identical tag, so an existing image IS the image that would be built.
+      - name: Probe registry
+        id: probe
+        run: |
+          image="${{ inputs.registry }}/${{ matrix.image.name }}${SUFFIX}:${TAG}"
+          if docker manifest inspect "$image" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "$image already built — skipping"
+          fi
+
+      - name: Build and push
+        if: steps.probe.outputs.exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.image.context || '.' }}
+          file: ${{ matrix.image.dockerfile || format('{0}/Dockerfile', matrix.image.context || '.') }}
+          push: true
+          cache-from: type=gha,scope=${{ matrix.image.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.name }}
+          tags: ${{ inputs.registry }}/${{ matrix.image.name }}${{ env.SUFFIX }}:${{ env.TAG }}
+
+  # Runs on every event, including pull requests. Only the push is gated: a PR
+  # still renders and verifies its manifests, which is the cheapest place to
+  # catch a broken overlay.
+  publish:
+    needs: [checksum, build]
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      # For its bundled Kustomize. Nothing here contacts a cluster.
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.36.2
+
+      - name: Set up Flux CLI
+        uses: fluxcd/flux2/action@main
+        with:
+          # Matched to the controller version installed in the cluster
+          # (flux2 chart 2.19.0). Bump both together.
+          version: 2.9.1
+
+      # flux reads ~/.docker/config.json, so this covers the artifact push too.
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish manifests
+        uses: KrammyGod/actions-system/.github/actions/publish@v1
+        with:
+          pins: ${{ needs.checksum.outputs.pins }}
+          namespace: ${{ inputs.namespace }}
+          # Derived, not configurable: the cluster-side OCIRepository builds
+          # the same string by hand. Two knobs that have to agree is one knob
+          # too many.
+          artifact: oci://${{ inputs.registry }}/${{ inputs.namespace }}-manifests
+          kustomize-dir: ${{ inputs.kustomize_dir }}
+          overlay: ${{ inputs.overlay }}
+          push: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}

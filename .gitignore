@@ -1,0 +1,7 @@
+.ci-wrapper/
+.ci-manifests/
+*.tmp
+__pycache__/
+
+# Design and planning notes stay local.
+docs/

@@ -1,0 +1,35 @@
+name: Context checksums
+description: Content-addressed tag per image, computed once for the whole run.
+
+inputs:
+  images:
+    description: 'JSON array of {name, context?, dockerfile?}'
+    required: true
+  registry:
+    description: Registry and owner prefix, e.g. ghcr.io/krammygod
+    required: true
+  dev-suffix:
+    description: Appended to each image name. Empty for prod, "-dev" for PRs.
+    required: false
+    default: ''
+
+outputs:
+  tags:
+    description: JSON object mapping image name to its src-<hash> tag
+    value: ${{ steps.compute.outputs.tags }}
+  pins:
+    description: TSV of <name>\t<newName>\t<newTag> for the kustomize wrapper
+    value: ${{ steps.compute.outputs.pins }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compute tags
+      id: compute
+      shell: bash
+      env:
+        IMAGES: ${{ inputs.images }}
+        REGISTRY: ${{ inputs.registry }}
+        DEV_SUFFIX: ${{ inputs.dev-suffix }}
+        SCRIPT: ${{ github.action_path }}/compute-tags.sh
+      run: bash "$SCRIPT"
