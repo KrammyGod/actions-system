@@ -25,6 +25,22 @@ on:
         required: false
         type: string
         default: overlays/prod
+      pr_overlay:
+        description: >
+          Overlay for pull requests, relative to kustomize_dir. Empty (the
+          default) is the normal case: a PR renders and verifies its manifests
+          but publishes nothing.
+
+          Setting it opts into a STANDING pull-request environment. PRs publish
+          to <namespace>-dev instead of <namespace>, and that environment is
+          never torn down — it is overwritten by the next PR and simply left
+          alone after a merge.
+
+          The cluster must already hold a Namespace, OCIRepository and
+          Kustomization for <namespace>-dev.
+        required: false
+        type: string
+        default: ''
       runner:
         required: false
         type: string
@@ -115,6 +131,14 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      PR_DEPLOY: ${{ inputs.pr_overlay != '' && github.event_name == 'pull_request' }}
+      NAMESPACE: >-
+        ${{ (inputs.pr_overlay != '' && github.event_name == 'pull_request')
+            && format('{0}-dev', inputs.namespace) || inputs.namespace }}
+      OVERLAY: >-
+        ${{ (inputs.pr_overlay != '' && github.event_name == 'pull_request')
+            && inputs.pr_overlay || inputs.overlay }}
     steps:
       - name: Checkout Source
         uses: actions/checkout@v4
@@ -144,11 +168,13 @@ jobs:
         uses: KrammyGod/actions-system/.github/actions/publish@v1
         with:
           pins: ${{ needs.checksum.outputs.pins }}
-          namespace: ${{ inputs.namespace }}
+          namespace: ${{ env.NAMESPACE }}
           # Derived, not configurable: the cluster-side OCIRepository builds
           # the same string by hand. Two knobs that have to agree is one knob
           # too many.
-          artifact: oci://${{ inputs.registry }}/${{ inputs.namespace }}-manifests
+          artifact: oci://${{ inputs.registry }}/${{ env.NAMESPACE }}-manifests
           kustomize-dir: ${{ inputs.kustomize_dir }}
-          overlay: ${{ inputs.overlay }}
-          push: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
+          overlay: ${{ env.OVERLAY }}
+          # A pull request publishes only when the caller opted in with
+          # pr_overlay. Without it the PR still renders and verifies
+          push: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' || env.PR_DEPLOY == 'true' }}

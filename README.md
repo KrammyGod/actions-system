@@ -306,8 +306,14 @@ both fire on main would run the same suite twice per push.
   is pushed. Whether it applied is only visible in the cluster
   (`kubectl -n flux-system get kustomizations`). Recovering this means running
   Flux's notification-controller and giving it a GitHub token.
-- **No PR environments.** Creating one needs an `OCIRepository` and a
-  `Kustomization` in the cluster, and CI deliberately can no longer write there.
+- **No per-PR environments.** A throwaway environment per pull request would need
+  CI to create an `OCIRepository` and a `Kustomization` in the cluster, and CI
+  deliberately can no longer write there. What `pr_overlay` gives instead is a
+  single STANDING pull-request environment: every PR publishes to the same
+  `<namespace>-dev` artifact, so a second open PR overwrites the first, and after
+  a merge the environment is simply left running rather than torn down. The
+  cluster objects for it are created once, by hand, alongside the production
+  ones.
 - `-dev` images accumulate in GHCR, as do per-commit manifest artifacts. Use a
   GHCR retention policy.
 - Rollback is a cluster-side operation — patch the `OCIRepository` onto an older

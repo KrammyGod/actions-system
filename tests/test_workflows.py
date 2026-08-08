@@ -31,7 +31,8 @@ ON = True
 deploy = load(".github/workflows/deploy.yml")
 call = deploy[ON]["workflow_call"]
 
-want_inputs = {"namespace", "images", "registry", "kustomize_dir", "overlay", "runner"}
+want_inputs = {"namespace", "images", "registry", "kustomize_dir", "overlay",
+               "pr_overlay", "runner"}
 check("deploy.yml declares exactly the documented inputs",
       set(call["inputs"]) == want_inputs,
       set(call["inputs"]) ^ want_inputs)
@@ -44,6 +45,8 @@ defaults = {
     "registry": "ghcr.io/krammygod",
     "kustomize_dir": "kustomize",
     "overlay": "overlays/prod",
+    # Empty is the normal case: a PR renders but publishes nothing.
+    "pr_overlay": "",
     "runner": "ubuntu-24.04-arm",
 }
 for key, value in defaults.items():
@@ -105,15 +108,36 @@ publish_step = [s for s in jobs["publish"]["steps"] if s.get("name") == "Publish
 gate = publish_step["with"]["push"]
 check("the artifact is pushed only from main or a manual dispatch",
       "refs/heads/main" in gate and "workflow_dispatch" in gate, gate)
-check("a pull request never pushes an artifact",
-      "pull_request" not in gate, gate)
+# A pull request publishes only when the caller opted in with pr_overlay, which
+# is a standing environment rather than a per-PR one — nothing here creates or
+# tears down a namespace. Without the opt-in the old behaviour stands: render
+# and verify, push nothing. The condition is resolved once into env.PR_DEPLOY so
+# the namespace, the artifact derived from it, the overlay and this gate cannot
+# disagree about whether a run is a pull-request publish.
+check("a pull request pushes only through the pr_overlay opt-in",
+      "env.PR_DEPLOY" in gate, gate)
+
+pr = jobs["publish"]["env"]
+check("the opt-in requires pr_overlay AND a pull request",
+      "inputs.pr_overlay != \'\'" in pr["PR_DEPLOY"]
+      and "pull_request" in pr["PR_DEPLOY"], pr["PR_DEPLOY"])
+
+# Derived, never configured, for the same reason the artifact is: the cluster
+# side builds the same string by hand.
+check("the pull-request namespace is the caller's namespace plus -dev",
+      "format(\'{0}-dev\', inputs.namespace)" in pr["NAMESPACE"], pr["NAMESPACE"])
+check("the pull-request overlay comes from pr_overlay",
+      "inputs.pr_overlay" in pr["OVERLAY"], pr["OVERLAY"])
 
 # The cluster-side OCIRepository builds this same string by hand. It is derived
 # rather than configurable so the two cannot drift apart.
 check("the artifact repository is derived from registry and namespace",
       publish_step["with"]["artifact"]
-      == "oci://${{ inputs.registry }}/${{ inputs.namespace }}-manifests",
+      == "oci://${{ inputs.registry }}/${{ env.NAMESPACE }}-manifests",
       publish_step["with"]["artifact"])
+check("the published namespace is the resolved one, not the raw input",
+      publish_step["with"]["namespace"] == "${{ env.NAMESPACE }}",
+      publish_step["with"]["namespace"])
 
 # Composite actions.
 ck = load(".github/actions/checksum/action.yml")
