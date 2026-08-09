@@ -149,11 +149,14 @@ jobs:
         with:
           version: v1.36.2
 
+      # Pinned to a tag, not upstream's @main: this job holds packages: write
+      # and a GHCR login, so whatever runs here can push to the registry.
       - name: Set up Flux CLI
-        uses: fluxcd/flux2/action@main
+        uses: fluxcd/flux2/action@v2.9.1
         with:
+          # Not implied by the ref — the action installs latest by default.
           # Matched to the controller version installed in the cluster
-          # (flux2 chart 2.19.0). Bump both together.
+          # (flux2 chart 2.19.0). Bump all three together.
           version: 2.9.1
 
       # flux reads ~/.docker/config.json, so this covers the artifact push too.
